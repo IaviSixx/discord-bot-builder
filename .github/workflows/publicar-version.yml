@@ -1,0 +1,50 @@
+# Publica una versión del programa a partir de una rama "subir/vX.Y.Z".
+# La rama lleva en release/ el instalador partido en trozos (GitHub no admite archivos de más
+# de 100 MB en git), latest.yml, el .blockmap y NOTAS.md. Este flujo une los trozos, comprueba
+# la firma SHA-512 de latest.yml, crea la release y borra la rama.
+name: Publicar versión
+
+on:
+  push:
+    branches: ['subir/**']
+
+permissions:
+  contents: write
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unir el instalador y comprobarlo
+        id: unir
+        run: |
+          set -euo pipefail
+          cd release
+          version=$(sed -n 's/^version: //p' latest.yml)
+          exe=$(sed -n 's/^path: //p' latest.yml)
+          cat $(ls "$exe".part* | sort -V) > "$exe"
+          esperado=$(sed -n 's/^sha512: //p' latest.yml)
+          real=$(openssl dgst -sha512 -binary "$exe" | base64 -w0)
+          if [ "$esperado" != "$real" ]; then echo "El instalador unido no coincide con latest.yml"; exit 1; fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "exe=$exe" >> "$GITHUB_OUTPUT"
+
+      - name: Crear la release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd release
+          v="v${{ steps.unir.outputs.version }}"
+          exe="${{ steps.unir.outputs.exe }}"
+          if gh release view "$v" >/dev/null 2>&1; then
+            gh release upload "$v" "$exe" "$exe.blockmap" latest.yml --clobber
+          else
+            gh release create "$v" "$exe" "$exe.blockmap" latest.yml --target main --title "Discord Bot Builder ${{ steps.unir.outputs.version }}" --notes-file NOTAS.md
+          fi
+
+      - name: Borrar la rama de subida
+        if: success()
+        run: git push origin --delete "$GITHUB_REF_NAME"
