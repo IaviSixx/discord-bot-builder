@@ -1,6 +1,7 @@
 # Publica una versión del programa a partir de una rama "subir/vX.Y.Z".
 # La rama lleva en release/ el instalador partido en trozos (GitHub no admite archivos de más
-# de 100 MB en git), latest.yml, el .blockmap y NOTAS.md. Este flujo une los trozos, comprueba
+# de 100 MB en git), latest.yml, el .blockmap y NOTAS.md. Los trozos se pueden subir en varios
+# envíos: el flujo solo actúa cuando aparece release/LISTO. Entonces une los trozos, comprueba
 # la firma SHA-512 de latest.yml, crea la release y borra la rama.
 name: Publicar versión
 
@@ -17,7 +18,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Comprobar que la subida está completa
+        id: listo
+        run: |
+          if [ -f release/LISTO ]; then echo "si=1" >> "$GITHUB_OUTPUT"; else echo "Faltan archivos por subir: se espera a release/LISTO"; fi
+
       - name: Unir el instalador y comprobarlo
+        if: steps.listo.outputs.si == '1'
         id: unir
         run: |
           set -euo pipefail
@@ -32,6 +39,7 @@ jobs:
           echo "exe=$exe" >> "$GITHUB_OUTPUT"
 
       - name: Crear la release
+        if: steps.listo.outputs.si == '1'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -45,6 +53,8 @@ jobs:
             gh release create "$v" "$exe" "$exe.blockmap" latest.yml --target main --title "Discord Bot Builder ${{ steps.unir.outputs.version }}" --notes-file NOTAS.md
           fi
 
-      - name: Borrar la rama de subida
-        if: success()
-        run: git push origin --delete "$GITHUB_REF_NAME"
+      - name: Borrar las ramas de subida
+        if: success() && steps.listo.outputs.si == '1'
+        run: |
+          git push origin --delete "$GITHUB_REF_NAME"
+          for rama in $(git ls-remote --heads origin 'trozos/*' | awk '{print $2}' | sed 's#refs/heads/##'); do git push origin --delete "$rama" || true; done
