@@ -1,8 +1,9 @@
 # Publica una versión del programa a partir de una rama "subir/vX.Y.Z".
-# La rama lleva en release/ el instalador partido en trozos (GitHub no admite archivos de más
-# de 100 MB en git), latest.yml, el .blockmap y NOTAS.md. Los trozos se pueden subir en varios
-# envíos: el flujo solo actúa cuando aparece release/LISTO. Entonces une los trozos, comprueba
-# la firma SHA-512 de latest.yml, crea la release y borra la rama.
+# La rama lleva en release/ los archivos grandes partidos en trozos (GitHub no admite archivos de
+# más de 100 MB en git): el instalador de Windows y los .zip de Mac; además latest.yml (Windows),
+# latest-mac.yml (Mac), el .blockmap y NOTAS.md. Los trozos se pueden subir en varios envíos: el
+# flujo solo actúa cuando aparece release/LISTO. Entonces une los trozos, comprueba el SHA-512 de
+# cada archivo con latest.yml y latest-mac.yml, crea la release y borra las ramas de subida.
 name: Publicar versión
 
 on:
@@ -23,20 +24,28 @@ jobs:
         run: |
           if [ -f release/LISTO ]; then echo "si=1" >> "$GITHUB_OUTPUT"; else echo "Faltan archivos por subir: se espera a release/LISTO"; fi
 
-      - name: Unir el instalador y comprobarlo
+      - name: Unir los archivos y comprobarlos
         if: steps.listo.outputs.si == '1'
         id: unir
         run: |
           set -euo pipefail
           cd release
-          version=$(sed -n 's/^version: //p' latest.yml)
-          exe=$(sed -n 's/^path: //p' latest.yml)
-          cat $(ls "$exe".part* | sort -V) > "$exe"
-          esperado=$(sed -n 's/^sha512: //p' latest.yml)
-          real=$(openssl dgst -sha512 -binary "$exe" | base64 -w0)
-          if [ "$esperado" != "$real" ]; then echo "El instalador unido no coincide con latest.yml"; exit 1; fi
+          # Unir cada archivo partido en trozos (instalador de Windows y .zip de Mac)
+          for base in $(ls | grep -E '\.part[0-9]+$' | sed -E 's/\.part[0-9]+$//' | sort -u); do
+            cat $(ls "$base".part* | sort -V) > "$base"
+            rm "$base".part*
+          done
+          # Cada archivo que anuncian latest.yml (Windows) y latest-mac.yml (Mac) tiene que coincidir
+          for yml in latest.yml latest-mac.yml; do
+            [ -f "$yml" ] || continue
+            paste -d' ' <(sed -n 's/^  - url: //p' "$yml") <(sed -n 's/^    sha512: //p' "$yml") | while read -r f esperado; do
+              real=$(openssl dgst -sha512 -binary "$f" | base64 -w0)
+              if [ "$esperado" != "$real" ]; then echo "$f no coincide con $yml"; exit 1; fi
+              echo "ok $f"
+            done
+          done
+          version=$(cat latest.yml latest-mac.yml 2>/dev/null | sed -n 's/^version: //p' | head -1)
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "exe=$exe" >> "$GITHUB_OUTPUT"
 
       - name: Crear la release
         if: steps.listo.outputs.si == '1'
@@ -46,11 +55,11 @@ jobs:
           set -euo pipefail
           cd release
           v="v${{ steps.unir.outputs.version }}"
-          exe="${{ steps.unir.outputs.exe }}"
+          archivos=$(ls | grep -v -x -e NOTAS.md -e LISTO)
           if gh release view "$v" >/dev/null 2>&1; then
-            gh release upload "$v" "$exe" "$exe.blockmap" latest.yml --clobber
+            gh release upload "$v" $archivos --clobber
           else
-            gh release create "$v" "$exe" "$exe.blockmap" latest.yml --target main --title "Discord Bot Builder ${{ steps.unir.outputs.version }}" --notes-file NOTAS.md
+            gh release create "$v" $archivos --target main --title "Discord Bot Builder ${{ steps.unir.outputs.version }}" --notes-file NOTAS.md
           fi
 
       - name: Borrar las ramas de subida
