@@ -44,7 +44,8 @@ jobs:
               echo "ok $f"
             done
           done
-          version=$(cat latest.yml latest-mac.yml 2>/dev/null | sed -n 's/^version: //p' | head -1)
+          # Vale con solo uno de los dos (una versión puede subirse primero para Mac y después para Windows)
+          version=$(cat latest*.yml | sed -n 's/^version: //p' | head -1)
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Crear la release
